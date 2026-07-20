@@ -9,7 +9,7 @@ Resources:
       FunctionName: sample-api
       CodeUri: src/
       Handler: app.handler
-      Runtime: python3.12
+      Runtime: python3.14
       MemorySize: 256
       Timeout: 10
       Events:
