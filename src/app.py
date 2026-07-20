@@ -19,7 +19,7 @@ def handler(event, context):
         if path == "/health":
             body = {"status": "ok"}
         else:
-            body = {"message": "Hello from Lambda!", "path": path}
+            body = {"message": "Hello from CodePipeline!", "path": path}
 
         logger.info(json.dumps({"msg": "request ok", "path": path}))
         return {
