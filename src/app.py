@@ -18,17 +18,12 @@ def handler(event, context):
     try:
         if path == "/health":
             body = {"status": "ok"}
-            status_code = 200
-        elif path == "/hello":
-            body = {"message": "Hello from Jay!", "path": path}
-            status_code = 200
         else:
-            body = {"error": "not found", "path": path}
-            status_code = 404
+            body = {"message": "Hello from J!", "path": path}
 
         logger.info(json.dumps({"msg": "request ok", "path": path}))
         return {
-            "statusCode": status_code,
+            "statusCode": 200,
             "headers": {"Content-Type": "application/json"},
             "body": json.dumps(body),
         }
