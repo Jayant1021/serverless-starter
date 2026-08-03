@@ -1,13 +1,15 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: Serverless starter - sample API (container image)
+Description: Serverless starter - sample API
 
 Resources:
   SampleApiFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: sample-api
-      PackageType: Image
+      CodeUri: src/
+      Handler: xyz.handler
+      Runtime: python3.12
       MemorySize: 256
       Timeout: 10
       Policies:
@@ -18,10 +20,6 @@ Resources:
           Properties:
             Path: /{proxy+}
             Method: ANY
-    Metadata:
-      Dockerfile: Dockerfile
-      DockerContext: ./src
-      DockerTag: python3.12-v1
 
   SampleApiLogGroup:
     Type: AWS::Logs::LogGroup
