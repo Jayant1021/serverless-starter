@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
+from fastapi import FastAPI, HTTPException, Query, status
 from mangum import Mangum
 from pydantic import BaseModel
 
@@ -21,22 +21,7 @@ class UserOut(BaseModel):
     age: Optional[int] = None
 
 
-# ---------- Fake auth ----------
-def verify_token(authorization: str = Header(...)):
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing or invalid Authorization header",
-        )
-
-    token = authorization.replace("Bearer ", "")
-    if token != "my-secret-token":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token",
-        )
-
-    return token
+# (Authentication removed — routes are public)
 
 
 # ---------- GET with query params ----------
@@ -60,7 +45,7 @@ def list_users(
 
 # ---------- GET by path param + headers/auth ----------
 @app.get("/users/{user_id}")
-def get_user(user_id: int, token: str = Depends(verify_token)):
+def get_user(user_id: int):
     if user_id != 1:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -78,7 +63,7 @@ def get_user(user_id: int, token: str = Depends(verify_token)):
 
 # ---------- POST with request body ----------
 @app.post("/users", status_code=status.HTTP_201_CREATED)
-def create_user(user: UserCreate, token: str = Depends(verify_token)):
+def create_user(user: UserCreate):
     created_user = UserOut(
         id=1,
         name=user.name,
@@ -95,7 +80,7 @@ def create_user(user: UserCreate, token: str = Depends(verify_token)):
 
 # ---------- PUT: replace full object ----------
 @app.put("/users/{user_id}")
-def update_user(user_id: int, user: UserCreate, token: str = Depends(verify_token)):
+def update_user(user_id: int, user: UserCreate):
     if user_id != 1:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -119,7 +104,7 @@ class UserPatch(BaseModel):
 
 
 @app.patch("/users/{user_id}")
-def patch_user(user_id: int, user: UserPatch, token: str = Depends(verify_token)):
+def patch_user(user_id: int, user: UserPatch):
     if user_id != 1:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -142,7 +127,7 @@ def patch_user(user_id: int, user: UserPatch, token: str = Depends(verify_token)
 
 # ---------- DELETE ----------
 @app.delete("/users/{user_id}")
-def delete_user(user_id: int, token: str = Depends(verify_token)):
+def delete_user(user_id: int):
     if user_id != 1:
         raise HTTPException(status_code=404, detail="User not found")
 
