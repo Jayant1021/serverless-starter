@@ -1,8 +1,29 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: Serverless starter - sample API
+Description: Serverless starter - sample API with WAF, logging, metrics and alarms
+
+Parameters:
+  AlertEmail:
+    Type: String
+    Description: Email address to receive CloudWatch alarm notifications
+    Default: "you@example.com"
+  ApiThrottleRate:
+    Type: Number
+    Description: Steady-state requests/sec allowed per route
+    Default: 100
+  ApiThrottleBurst:
+    Type: Number
+    Description: Burst capacity per route
+    Default: 200
+  LambdaReservedConcurrency:
+    Type: Number
+    Description: Max concurrent Lambda executions (protects account concurrency pool)
+    Default: 50
 
 Resources:
+  # ---------------------------------------------------------------------
+  # Lambda function (single function, points at xyz.py -> Mangum handler)
+  # ---------------------------------------------------------------------
   SampleApiFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -12,12 +33,14 @@ Resources:
       Runtime: python3.12
       MemorySize: 256
       Timeout: 10
+      ReservedConcurrentExecutions: !Ref LambdaReservedConcurrency
       Policies:
         - AWSLambdaBasicExecutionRole
       Events:
         AnyRequest:
           Type: HttpApi
           Properties:
+            ApiId: !Ref SampleHttpApi
             Path: /{proxy+}
             Method: ANY
 
@@ -27,7 +50,308 @@ Resources:
       LogGroupName: /aws/lambda/sample-api
       RetentionInDays: 14
 
+  # ---------------------------------------------------------------------
+  # LAYER 2: API Access & Traffic Management
+  # Explicit HttpApi so we can attach access logs + per-route throttling
+  # ---------------------------------------------------------------------
+  SampleHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: prod
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: >-
+          {"requestId":"$context.requestId","ip":"$context.identity.sourceIp",
+          "requestTime":"$context.requestTime","httpMethod":"$context.httpMethod",
+          "path":"$context.path","status":"$context.status",
+          "responseLength":"$context.responseLength","integrationError":"$context.integrationErrorMessage",
+          "latency":"$context.responseLatency"}
+      DefaultRouteSettings:
+        ThrottlingRateLimit: !Ref ApiThrottleRate
+        ThrottlingBurstLimit: !Ref ApiThrottleBurst
+        DetailedMetricsEnabled: true
+
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/http-api/sample-api-access-logs
+      RetentionInDays: 14
+
+  # ---------------------------------------------------------------------
+  # LAYER 1: Security & Attack Protection (WAF)
+  # Shield Standard is automatic/free at the account level - no resource needed
+  # ---------------------------------------------------------------------
+  SampleWebAcl:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: sample-api-waf
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: sample-api-waf
+      Rules:
+        - Name: AWS-CommonRuleSet
+          Priority: 0
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: CommonRuleSet
+
+        - Name: AWS-KnownBadInputs
+          Priority: 1
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: KnownBadInputs
+
+        - Name: AWS-SQLi
+          Priority: 2
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesSQLiRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: SQLiRuleSet
+
+        - Name: AWS-IPReputation
+          Priority: 3
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesAmazonIpReputationList
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: IPReputation
+
+        - Name: RateLimitPerIP
+          Priority: 4
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: 2000
+              AggregateKeyType: IP
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: RateLimitPerIP
+
+  SampleWebAclAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Sub "arn:aws:apigateway:${AWS::Region}::/apis/${SampleHttpApi}/stages/prod"
+      WebACLArn: !GetAtt SampleWebAcl.Arn
+
+  # WAF logs -> CloudWatch Logs (log group name MUST start with "aws-waf-logs-")
+  WafLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: aws-waf-logs-sample-api
+      RetentionInDays: 14
+
+  WafLoggingConfiguration:
+    Type: AWS::WAFv2::LoggingConfiguration
+    Properties:
+      ResourceArn: !GetAtt SampleWebAcl.Arn
+      LogDestinationConfigs:
+        - !GetAtt WafLogGroup.Arn
+
+  # ---------------------------------------------------------------------
+  # Alerting
+  # ---------------------------------------------------------------------
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: sample-api-alerts
+
+  AlertTopicSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  # ---------------------------------------------------------------------
+  # Alarms - Lambda
+  # ---------------------------------------------------------------------
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: sample-api-lambda-errors
+      AlarmDescription: Lambda error rate is elevated
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref SampleApiFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  LambdaThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: sample-api-lambda-throttles
+      AlarmDescription: Lambda invocations are being throttled - traffic is being dropped
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref SampleApiFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  LambdaDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: sample-api-lambda-duration
+      AlarmDescription: Lambda p99 duration is approaching timeout
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      ExtendedStatistic: p99
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref SampleApiFunction
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 8000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  # ---------------------------------------------------------------------
+  # Alarms - API Gateway (HttpApi)
+  # ---------------------------------------------------------------------
+  Api5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: sample-api-5xx-errors
+      AlarmDescription: API Gateway 5xx error count is elevated
+      Namespace: AWS/ApiGateway
+      MetricName: 5xx
+      Dimensions:
+        - Name: ApiId
+          Value: !Ref SampleHttpApi
+        - Name: Stage
+          Value: prod
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  Api4xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: sample-api-4xx-spike
+      AlarmDescription: API Gateway 4xx error count spiked (possible bad clients/bot probing)
+      Namespace: AWS/ApiGateway
+      MetricName: 4xx
+      Dimensions:
+        - Name: ApiId
+          Value: !Ref SampleHttpApi
+        - Name: Stage
+          Value: prod
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 50
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  ApiLatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: sample-api-latency-high
+      AlarmDescription: API Gateway integration latency (p99) is high
+      Namespace: AWS/ApiGateway
+      MetricName: IntegrationLatency
+      ExtendedStatistic: p99
+      Dimensions:
+        - Name: ApiId
+          Value: !Ref SampleHttpApi
+        - Name: Stage
+          Value: prod
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  # ---------------------------------------------------------------------
+  # Alarms - WAF (Layer 1 visibility)
+  # ---------------------------------------------------------------------
+  WafBlockedRequestsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: sample-api-waf-blocked-spike
+      AlarmDescription: WAF is blocking an unusually high number of requests - possible attack
+      Namespace: AWS/WAFV2
+      MetricName: BlockedRequests
+      Dimensions:
+        - Name: WebACL
+          Value: sample-api-waf
+        - Name: Region
+          Value: !Ref AWS::Region
+        - Name: Rule
+          Value: ALL
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 500
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
 Outputs:
   ApiUrl:
     Description: Your API base URL
-    Value: !Sub "https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+    Value: !Sub "https://${SampleHttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+  WebAclArn:
+    Description: WAF Web ACL ARN attached to the API
+    Value: !GetAtt SampleWebAcl.Arn
+  AlertTopicArn:
+    Description: SNS topic ARN - subscribe additional endpoints here (Slack, PagerDuty, etc.)
+    Value: !Ref AlertTopic
