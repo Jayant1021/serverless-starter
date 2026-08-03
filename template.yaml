@@ -28,7 +28,6 @@ Resources:
       RetentionInDays: 14
 
   # ---------- Users API: REST API (API Gateway v1), explicit routes/methods ----------
- 
   UsersApiFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -44,37 +43,31 @@ Resources:
         ListUsers:
           Type: Api
           Properties:
-            
             Path: /users
             Method: get
         CreateUser:
           Type: Api
           Properties:
-            
             Path: /users
             Method: post
         GetUser:
           Type: Api
           Properties:
-            
             Path: /users/{user_id}
             Method: get
         UpdateUser:
           Type: Api
           Properties:
-           
             Path: /users/{user_id}
             Method: put
         PatchUser:
           Type: Api
           Properties:
-           
             Path: /users/{user_id}
             Method: patch
         DeleteUser:
           Type: Api
           Properties:
-            
             Path: /users/{user_id}
             Method: delete
 
@@ -91,4 +84,4 @@ Outputs:
 
   UsersApiUrl:
     Description: Users REST API base URL
-    Value: !Sub "https://${UsersRestApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod"
