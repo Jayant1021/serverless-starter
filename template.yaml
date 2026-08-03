@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: Serverless starter - sample API with WAF, logging, metrics and alarms
+Description: Serverless starter - sample API (REST API) with WAF, logging, metrics and alarms
 
 Parameters:
   AlertEmail:
@@ -18,7 +18,7 @@ Parameters:
 
 Resources:
   # ---------------------------------------------------------------------
-  # Lambda function (single function, points at xyz.py -> Mangum handler)
+  # Lambda function
   # ---------------------------------------------------------------------
   SampleApiFunction:
     Type: AWS::Serverless::Function
@@ -33,9 +33,9 @@ Resources:
         - AWSLambdaBasicExecutionRole
       Events:
         AnyRequest:
-          Type: HttpApi
+          Type: Api
           Properties:
-            ApiId: !Ref SampleHttpApi
+            RestApiId: !Ref SampleApi
             Path: /{proxy+}
             Method: ANY
 
@@ -47,13 +47,17 @@ Resources:
 
   # ---------------------------------------------------------------------
   # LAYER 2: API Access & Traffic Management
-  # Explicit HttpApi so we can attach access logs + per-route throttling
+  # REST API (not HttpApi) - required so WAF can attach directly.
+  # EndpointConfiguration MUST be REGIONAL: WAF's regional association
+  # does not work with the default EDGE (CloudFront-backed) endpoint type.
   # ---------------------------------------------------------------------
-  SampleHttpApi:
-    Type: AWS::Serverless::HttpApi
+  SampleApi:
+    Type: AWS::Serverless::Api
     Properties:
+      Name: sample-api-gateway
       StageName: prod
-      AccessLogSettings:
+      EndpointConfiguration: REGIONAL
+      AccessLogSetting:
         DestinationArn: !GetAtt ApiAccessLogGroup.Arn
         Format: >-
           {"requestId":"$context.requestId","ip":"$context.identity.sourceIp",
@@ -61,19 +65,23 @@ Resources:
           "path":"$context.path","status":"$context.status",
           "responseLength":"$context.responseLength","integrationError":"$context.integrationErrorMessage",
           "latency":"$context.responseLatency"}
-      DefaultRouteSettings:
-        ThrottlingRateLimit: !Ref ApiThrottleRate
-        ThrottlingBurstLimit: !Ref ApiThrottleBurst
-        DetailedMetricsEnabled: true
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          ThrottlingRateLimit: !Ref ApiThrottleRate
+          ThrottlingBurstLimit: !Ref ApiThrottleBurst
+          MetricsEnabled: true
+          LoggingLevel: INFO
 
   ApiAccessLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: /aws/http-api/sample-api-access-logs
+      LogGroupName: /aws/apigateway/sample-api-access-logs
       RetentionInDays: 14
 
   # ---------------------------------------------------------------------
   # LAYER 1: Security & Attack Protection (WAF)
+  # Now works directly - REST API stages support regional WAF association.
   # Shield Standard is automatic/free at the account level - no resource needed
   # ---------------------------------------------------------------------
   SampleWebAcl:
@@ -156,7 +164,7 @@ Resources:
   SampleWebAclAssociation:
     Type: AWS::WAFv2::WebACLAssociation
     Properties:
-      ResourceArn: !Sub "arn:aws:apigateway:${AWS::Region}::/apis/${SampleHttpApi}/stages/prod"
+      ResourceArn: !Sub "arn:aws:apigateway:${AWS::Region}::/restapis/${SampleApi}/stages/prod"
       WebACLArn: !GetAtt SampleWebAcl.Arn
 
   # WAF logs -> CloudWatch Logs (log group name MUST start with "aws-waf-logs-")
@@ -249,7 +257,10 @@ Resources:
         - !Ref AlertTopic
 
   # ---------------------------------------------------------------------
-  # Alarms - API Gateway (HttpApi)
+  # Alarms - API Gateway (REST API)
+  # NOTE: metric names/dimensions differ from HttpApi:
+  #   - 4XXError / 5XXError (not 4xx / 5xx)
+  #   - dimension is ApiName (not ApiId)
   # ---------------------------------------------------------------------
   Api5xxAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -257,10 +268,10 @@ Resources:
       AlarmName: sample-api-5xx-errors
       AlarmDescription: API Gateway 5xx error count is elevated
       Namespace: AWS/ApiGateway
-      MetricName: 5xx
+      MetricName: 5XXError
       Dimensions:
-        - Name: ApiId
-          Value: !Ref SampleHttpApi
+        - Name: ApiName
+          Value: sample-api-gateway
         - Name: Stage
           Value: prod
       Statistic: Sum
@@ -278,10 +289,10 @@ Resources:
       AlarmName: sample-api-4xx-spike
       AlarmDescription: API Gateway 4xx error count spiked (possible bad clients/bot probing)
       Namespace: AWS/ApiGateway
-      MetricName: 4xx
+      MetricName: 4XXError
       Dimensions:
-        - Name: ApiId
-          Value: !Ref SampleHttpApi
+        - Name: ApiName
+          Value: sample-api-gateway
         - Name: Stage
           Value: prod
       Statistic: Sum
@@ -302,8 +313,8 @@ Resources:
       MetricName: IntegrationLatency
       ExtendedStatistic: p99
       Dimensions:
-        - Name: ApiId
-          Value: !Ref SampleHttpApi
+        - Name: ApiName
+          Value: sample-api-gateway
         - Name: Stage
           Value: prod
       Period: 300
@@ -343,7 +354,7 @@ Resources:
 Outputs:
   ApiUrl:
     Description: Your API base URL
-    Value: !Sub "https://${SampleHttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+    Value: !Sub "https://${SampleApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
   WebAclArn:
     Description: WAF Web ACL ARN attached to the API
     Value: !GetAtt SampleWebAcl.Arn
