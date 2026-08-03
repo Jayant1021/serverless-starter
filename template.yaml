@@ -15,10 +15,6 @@ Parameters:
     Type: Number
     Description: Burst capacity per route
     Default: 200
-  LambdaReservedConcurrency:
-    Type: Number
-    Description: Max concurrent Lambda executions (protects account concurrency pool)
-    Default: 50
 
 Resources:
   # ---------------------------------------------------------------------
@@ -33,7 +29,6 @@ Resources:
       Runtime: python3.12
       MemorySize: 256
       Timeout: 10
-      ReservedConcurrentExecutions: !Ref LambdaReservedConcurrency
       Policies:
         - AWSLambdaBasicExecutionRole
       Events:
