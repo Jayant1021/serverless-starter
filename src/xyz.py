@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query, status
+from fastapi import FastAPI, HTTPException, status
 from mangum import Mangum
 from pydantic import BaseModel
 
@@ -26,20 +26,11 @@ class UserOut(BaseModel):
 
 # ---------- GET with query params ----------
 @app.get("/users")
-def list_users(
-    search: Optional[str] = Query(None, description="Search by name"),
-    page: int = Query(1, ge=1),
-    limit: int = Query(10, ge=1, le=100),
-):
+def list_users():
     return {
         "success": True,
         "message": "Users fetched successfully",
         "data": [],
-        "filters": {
-            "search": search,
-            "page": page,
-            "limit": limit,
-        },
     }
 
 
