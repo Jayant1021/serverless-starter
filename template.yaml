@@ -18,6 +18,29 @@ Parameters:
 
 Resources:
   # ---------------------------------------------------------------------
+  # REST API access logging requires this ACCOUNT-LEVEL role to exist.
+  # This is a one-time-per-account/region setting - unlike HttpApi, REST
+  # API's AccessLogSetting fails without it (the error you just hit).
+  # ---------------------------------------------------------------------
+  ApiGatewayCloudWatchRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+
+  ApiGatewayAccount:
+    Type: AWS::ApiGateway::Account
+    Properties:
+      CloudWatchRoleArn: !GetAtt ApiGatewayCloudWatchRole.Arn
+
+  # ---------------------------------------------------------------------
   # Lambda function
   # ---------------------------------------------------------------------
   SampleApiFunction:
@@ -53,6 +76,7 @@ Resources:
   # ---------------------------------------------------------------------
   SampleApi:
     Type: AWS::Serverless::Api
+    DependsOn: ApiGatewayAccount
     Properties:
       Name: sample-api-gateway
       StageName: prod
