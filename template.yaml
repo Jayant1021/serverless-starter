@@ -10,11 +10,11 @@ Parameters:
   ApiThrottleRate:
     Type: Number
     Description: Steady-state requests/sec allowed per route
-    Default: 8
+    Default: 100
   ApiThrottleBurst:
     Type: Number
     Description: Burst capacity per route
-    Default: 8
+    Default: 200
 
 Resources:
   # ---------------------------------------------------------------------

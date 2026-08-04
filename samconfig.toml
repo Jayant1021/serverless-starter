@@ -6,4 +6,4 @@ region = "ap-south-1"
 resolve_s3 = true
 confirm_changeset = false
 capabilities = "CAPABILITY_IAM"
-parameter_overrides = "AlertEmail=jacopobearzatti89@gmail.com ApiThrottleRate=8 ApiThrottleBurst=8"
+parameter_overrides = "AlertEmail=jacopobearzatti89@gmail.com"
