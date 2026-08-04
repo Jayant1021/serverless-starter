@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: Serverless starter - REST API, explicit, no WAF yet
+Description: Serverless starter - REST API with WAF, logging, metrics and alarms
 
 Parameters:
   AlertEmail:
@@ -85,6 +85,105 @@ Resources:
     Properties:
       LogGroupName: /aws/apigateway/sample-api-access-logs
       RetentionInDays: 14
+
+  SampleWebAcl:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: sample-api-waf
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: sample-api-waf
+      Rules:
+        - Name: AWS-CommonRuleSet
+          Priority: 0
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: CommonRuleSet
+
+        - Name: AWS-KnownBadInputs
+          Priority: 1
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: KnownBadInputs
+
+        - Name: AWS-SQLi
+          Priority: 2
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesSQLiRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: SQLiRuleSet
+
+        - Name: AWS-IPReputation
+          Priority: 3
+          OverrideAction:
+            None: {}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesAmazonIpReputationList
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: IPReputation
+
+        - Name: RateLimitPerIP
+          Priority: 4
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: 2000
+              AggregateKeyType: IP
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: RateLimitPerIP
+
+  SampleWebAclAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    DependsOn:
+      - SampleApi
+      - SampleWebAcl
+    Properties:
+      ResourceArn: !Sub "arn:aws:apigateway:${AWS::Region}::/restapis/${SampleApi}/stages/prod"
+      WebACLArn: !GetAtt SampleWebAcl.Arn
+
+  WafLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: aws-waf-logs-sample-api
+      RetentionInDays: 14
+
+  WafLoggingConfiguration:
+    Type: AWS::WAFv2::LoggingConfiguration
+    Properties:
+      ResourceArn: !GetAtt SampleWebAcl.Arn
+      LogDestinationConfigs:
+        - !GetAtt WafLogGroup.Arn
 
   AlertTopic:
     Type: AWS::SNS::Topic
@@ -212,8 +311,32 @@ Resources:
       AlarmActions:
         - !Ref AlertTopic
 
+  WafBlockedRequestsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: sample-api-waf-blocked-spike
+      Namespace: AWS/WAFV2
+      MetricName: BlockedRequests
+      Dimensions:
+        - Name: WebACL
+          Value: sample-api-waf
+        - Name: Region
+          Value: !Ref AWS::Region
+        - Name: Rule
+          Value: ALL
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 500
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
 Outputs:
   ApiUrl:
     Value: !Sub "https://${SampleApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
   AlertTopicArn:
     Value: !Ref AlertTopic
+  WebAclArn:
+    Value: !GetAtt SampleWebAcl.Arn
